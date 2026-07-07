@@ -1,0 +1,155 @@
+name: Create and publish Docker images
+
+on:
+  push:
+    branches: ['main']
+    paths:
+      - 'eps-checker.html'
+      - 'HPI - Teltow - Brandenburg Gate .gpx'
+      - 'Dockerfile'
+      - 'docker/**'
+      - 'valhalla/Dockerfile'
+      - 'docker-compose.prod.yml'
+      - '.github/workflows/docker.yml'
+  workflow_dispatch: {}
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for web app image
+        id: meta
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: ${{ env.REGISTRY }}/martintaraz/eps-route-checker
+
+      - name: Build and push web app image
+        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=min,scope=web
+
+      - name: Extract metadata for Valhalla routing image
+        id: meta-valhalla
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: ${{ env.REGISTRY }}/martintaraz/eps-route-checker-valhalla
+
+      # Heavy on first run (downloads OSM extracts, builds the Berlin+Brandenburg
+      # tileset ~15 min). The tile-build layer is cached by buildx, so later pushes
+      # only rebuild it when valhalla/Dockerfile changes.
+      - name: Build and push Valhalla routing image
+        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
+        with:
+          context: .
+          file: ./valhalla/Dockerfile
+          push: true
+          tags: ${{ steps.meta-valhalla.outputs.tags }}
+          labels: ${{ steps.meta-valhalla.outputs.labels }}
+          cache-from: type=gha,scope=valhalla
+          cache-to: type=gha,mode=min,scope=valhalla
+
+  deploy-to-portainer:
+    needs: build-and-push-image
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate with Portainer
+        id: auth
+        run: |
+          PORTAINER_BASE="${{ secrets.PORTAINER_URL }}"
+          PORTAINER_BASE="${PORTAINER_BASE%/}"
+
+          echo "Authenticating with Portainer..."
+          RESPONSE=$(curl --silent --show-error --fail-with-body \
+            --retry 3 --retry-delay 5 --retry-connrefused \
+            --max-time 30 \
+            -X POST "${PORTAINER_BASE}/api/auth" \
+            -H "Content-Type: application/json" \
+            -d '{"username": "${{ secrets.PORTAINER_USERNAME }}", "password": "${{ secrets.PORTAINER_PASSWORD }}"}')
+
+          JWT=$(echo "$RESPONSE" | jq -r '.jwt')
+          if [ -z "$JWT" ] || [ "$JWT" = "null" ]; then
+            echo "::error::Failed to authenticate with Portainer"
+            echo "$RESPONSE"
+            exit 1
+          fi
+          echo "::add-mask::$JWT"
+          echo "jwt=$JWT" >> "$GITHUB_OUTPUT"
+          echo "portainer_base=$PORTAINER_BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch current stack environment
+        id: stack
+        run: |
+          echo "Fetching current stack env vars..."
+          STACK_JSON=$(curl --silent --show-error --fail-with-body \
+            --max-time 30 \
+            -X GET "${{ steps.auth.outputs.portainer_base }}/api/stacks/${{ secrets.PORTAINER_STACK_ID }}" \
+            -H "Authorization: Bearer ${{ steps.auth.outputs.jwt }}")
+
+          ENV_JSON=$(echo "$STACK_JSON" | jq '.Env // []')
+          echo "Found $(echo "$ENV_JSON" | jq 'length') environment variables"
+          echo "$ENV_JSON" > /tmp/stack_env.json
+
+      - name: Update and redeploy stack
+        run: |
+          COMPOSE_CONTENT=$(cat docker-compose.prod.yml)
+          ENV_JSON=$(cat /tmp/stack_env.json)
+
+          PAYLOAD=$(jq -n \
+            --arg content "$COMPOSE_CONTENT" \
+            --argjson env "$ENV_JSON" \
+            '{stackFileContent: $content, env: $env, pullImage: true, prune: true}')
+
+          echo "Updating stack ${{ secrets.PORTAINER_STACK_ID }}..."
+          RESPONSE=$(curl --silent --show-error --fail-with-body \
+            --retry 2 --retry-delay 10 --retry-connrefused \
+            --max-time 120 \
+            -X PUT "${{ steps.auth.outputs.portainer_base }}/api/stacks/${{ secrets.PORTAINER_STACK_ID }}?endpointId=${{ secrets.PORTAINER_ENDPOINT_ID }}" \
+            -H "Authorization: Bearer ${{ steps.auth.outputs.jwt }}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          echo "Stack updated successfully"
+          echo "$RESPONSE" | jq '{Id, Name, Status}' 2>/dev/null || true
+
+      - name: Prune old Docker images
+        run: |
+          echo "Pruning dangling images..."
+          curl --silent --show-error \
+            --max-time 60 \
+            -X POST "${{ steps.auth.outputs.portainer_base }}/api/endpoints/${{ secrets.PORTAINER_ENDPOINT_ID }}/docker/images/prune" \
+            -H "Authorization: Bearer ${{ steps.auth.outputs.jwt }}" \
+            -H "Content-Type: application/json" \
+            -d '{"filters": {"dangling": ["true"]}}' \
+            | jq '{SpaceReclaimed: (.SpaceReclaimed / 1048576 | floor | tostring + " MB"), ImagesDeleted: (.ImagesDeleted | length)}' 2>/dev/null || true

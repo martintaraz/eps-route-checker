@@ -1,0 +1,13 @@
+# Local Valhalla data — hundreds of MB of OSM extracts + built tiles (see valhalla/README.md)
+valhalla/custom_files/
+
+# Local editor / harness config
+.claude/
+
+# Test & scratch artifacts
+.playwright-mcp/
+*.jpeg
+*.png
+
+# OS junk
+.DS_Store

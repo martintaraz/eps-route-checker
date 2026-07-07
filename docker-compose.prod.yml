@@ -1,0 +1,34 @@
+version: "3.6"
+
+services:
+  eps-route-checker:
+    restart: unless-stopped
+    image: ghcr.io/martintaraz/eps-route-checker:main
+    depends_on:
+      - valhalla
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.eps-route-checker.rule=Host(`eps-route-checker.random.martintaraz.de`)"
+      - "traefik.http.routers.eps-route-checker.entrypoints=websecure"
+      - "traefik.http.services.eps-route-checker.loadbalancer.server.port=80"
+      - "traefik.http.routers.eps-route-checker.service=eps-route-checker"
+      - "traefik.http.routers.eps-route-checker.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.eps-route-checker.tls=true"
+      - "traefik.docker.network=web"
+    networks:
+      - web
+      - eps_internal
+
+  # Self-hosted routing engine with the Berlin+Brandenburg tileset baked into the
+  # image (see valhalla/Dockerfile). Internal only — reached via nginx's /valhalla proxy.
+  valhalla:
+    restart: unless-stopped
+    image: ghcr.io/martintaraz/eps-route-checker-valhalla:main
+    networks:
+      - eps_internal
+
+networks:
+  web:
+    external: true
+  eps_internal:
+    external: false
