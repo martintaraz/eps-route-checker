@@ -1,5 +1,6 @@
-# Local Valhalla data — hundreds of MB of OSM extracts + built tiles (see valhalla/README.md)
-valhalla/custom_files/
+# Local share-backend storage (uploaded GPX files)
+data/
+backend/data/
 
 # Local editor / harness config
 .claude/

@@ -5,10 +5,10 @@ on:
     branches: ['main']
     paths:
       - 'eps-checker.html'
-      - 'HPI - Teltow - Brandenburg Gate .gpx'
+      - '100Meilen_2026-1.gpx'
       - 'Dockerfile'
       - 'docker/**'
-      - 'valhalla/Dockerfile'
+      - 'backend/**'
       - 'docker-compose.prod.yml'
       - '.github/workflows/docker.yml'
   workflow_dispatch: {}
@@ -54,25 +54,22 @@ jobs:
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=min,scope=web
 
-      - name: Extract metadata for Valhalla routing image
-        id: meta-valhalla
+      - name: Extract metadata for share backend image
+        id: meta-backend
         uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
-          images: ${{ env.REGISTRY }}/martintaraz/eps-route-checker-valhalla
+          images: ${{ env.REGISTRY }}/martintaraz/eps-route-checker-backend
 
-      # Heavy on first run (downloads OSM extracts, builds the Berlin+Brandenburg
-      # tileset ~15 min). The tile-build layer is cached by buildx, so later pushes
-      # only rebuild it when valhalla/Dockerfile changes.
-      - name: Build and push Valhalla routing image
+      - name: Build and push share backend image
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
-          context: .
-          file: ./valhalla/Dockerfile
+          context: ./backend
+          file: ./backend/Dockerfile
           push: true
-          tags: ${{ steps.meta-valhalla.outputs.tags }}
-          labels: ${{ steps.meta-valhalla.outputs.labels }}
-          cache-from: type=gha,scope=valhalla
-          cache-to: type=gha,mode=min,scope=valhalla
+          tags: ${{ steps.meta-backend.outputs.tags }}
+          labels: ${{ steps.meta-backend.outputs.labels }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=min,scope=backend
 
   deploy-to-portainer:
     needs: build-and-push-image

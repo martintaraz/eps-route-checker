@@ -1,42 +1,43 @@
 # EPS Route-Checker 🐛
 
-Plan and check running/cycling routes around Berlin & Brandenburg that avoid reported
+Check a running/cycling GPX track around Berlin & Brandenburg against reported
 **Eichenprozessionsspinner** (oak processionary moth) trees — whose caterpillar hairs
-cause skin, eye and airway irritation.
+cause skin, eye and airway irritation — and share the result by link.
 
-The whole app is a single static HTML file ([`eps-checker.html`](eps-checker.html)) that:
+The frontend is a single static HTML file ([`eps-checker.html`](eps-checker.html)) that:
 
 - pulls crowdsourced EPS reports from the public Supabase behind
   [eichenprozessionsspinner-melden.de](https://eichenprozessionsspinner-melden.de),
-- **🔍 GPX prüfen** — upload a track and see the closest approach to any reported tree, and
-- **🗺️ Route planen** — click waypoints on the map and get an EPS-avoiding route
-  (foot or bike) with elevation, exportable as GPX for Strava/Garmin.
+- loads a GPX track (bundled default: the Berlin **100 Meilen** ultra) and shows the closest
+  approach to any reported tree, plus an adjustable **Warnradius**,
+- draws **only the trees near the track** (orange nearby, red inside the warn radius) — no
+  region-wide clutter, and
+- **🔗 shares** a track + its findings via a short link `…/‹uuid›` backed by a tiny service.
 
-Routing/avoidance is done by a self-hosted [Valhalla](https://github.com/valhalla/valhalla)
-instance; without it, the analysis (check) features still work.
+## Architecture
+
+- **web** ([`Dockerfile`](Dockerfile), [`docker/nginx.conf`](docker/nginx.conf)) — nginx serving
+  the app, reverse-proxying `/api` to the backend, and serving `index.html` for `/‹uuid›` links.
+- **backend** ([`backend/`](backend)) — dependency-free Python service storing shared GPX by
+  UUID (`POST /api/routes`, `GET /api/routes/‹uuid›`) on a mounted volume.
 
 ## Run locally
 
 ```bash
-# 1. routing backend (optional, needed for the detour / planning features)
-brew install osmium-tool          # one-time
-cd valhalla && make check         # safe: verifies Docker + osmium
-make data && make up && make config   # WiFi only — downloads ~320 MB, builds tiles (~15 min)
-cd ..
+# 1. share backend (stores shared GPX under ./data)
+DATA_DIR=./data python3 backend/app.py        # :8080
 
-# 2. the app (serves static files + proxies /valhalla to :8002)
-python3 serve.py                  # http://localhost:8000/eps-checker.html
+# 2. the app (serves static files + proxies /api + /‹uuid› fallback)
+python3 serve.py                              # http://localhost:8000/eps-checker.html
 ```
-
-See [`valhalla/README.md`](valhalla/README.md) for the routing backend details.
 
 ## Deployment
 
 Pushing to `main` triggers [`.github/workflows/docker.yml`](.github/workflows/docker.yml):
 
 1. builds & pushes two images to GHCR:
-   - `eps-route-checker` — nginx serving the app + reverse-proxying `/valhalla`,
-   - `eps-route-checker-valhalla` — Valhalla with the Berlin+Brandenburg tileset baked in,
+   - `eps-route-checker` — nginx serving the app + `/api` proxy + `/‹uuid›` fallback,
+   - `eps-route-checker-backend` — the share service,
 2. redeploys the Portainer stack ([`docker-compose.prod.yml`](docker-compose.prod.yml)),
    served behind Traefik at **https://eps-route-checker.random.martintaraz.de**.
 

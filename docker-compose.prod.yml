@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     image: ghcr.io/martintaraz/eps-route-checker:main
     depends_on:
-      - valhalla
+      - backend
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.eps-route-checker.rule=Host(`eps-route-checker.random.martintaraz.de`)"
@@ -19,13 +19,18 @@ services:
       - web
       - eps_internal
 
-  # Self-hosted routing engine with the Berlin+Brandenburg tileset baked into the
-  # image (see valhalla/Dockerfile). Internal only — reached via nginx's /valhalla proxy.
-  valhalla:
+  # Minimal share backend — stores shared GPX by UUID. Internal only, reached via nginx /api.
+  backend:
     restart: unless-stopped
-    image: ghcr.io/martintaraz/eps-route-checker-valhalla:main
+    image: ghcr.io/martintaraz/eps-route-checker-backend:main
+    volumes:
+      - eps_shared_routes:/data
     networks:
       - eps_internal
+
+volumes:
+  eps_shared_routes:
+    external: false
 
 networks:
   web:
